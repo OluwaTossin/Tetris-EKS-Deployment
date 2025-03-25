@@ -58,9 +58,9 @@ resource "aws_security_group" "Jenkins-sg" {
 }
 
 resource "aws_instance" "web" {
-  ami                    = "ami-03f4878755434977f"
+  ami                    = "ami-084568db4383264d4"  # Ubuntu 24.04 LTS
   instance_type          = "t2.large"
-  key_name               = "test-access-keys"
+ # key_name               = "Tosin_accessKeys (1)"
   vpc_security_group_ids = [aws_security_group.Jenkins-sg.id]
   user_data              = templatefile("./install_jenkins.sh", {})
   iam_instance_profile   = aws_iam_instance_profile.example_profile.name
