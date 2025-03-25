@@ -1,64 +1,144 @@
-pipeline{
+pipeline {
     agent any
-    tools{
+
+    tools {
         jdk 'jdk17'
+        nodejs 'node16'
         terraform 'terraform'
     }
-    stages{
-        stage('clean Workspace'){
-            steps{
+
+    parameters {
+        choice(name: 'APP_VERSION', choices: ['tetrisv1', 'tetrisv2'], description: 'Select which version to build and deploy.')
+        choice(name: 'TERRAFORM_ACTION', choices: ['apply', 'destroy', 'skip'], description: 'Terraform action to perform')
+    }
+
+    environment {
+        AWS_REGION    = 'us-east-1'
+        ACCOUNT_ID    = '590183956481'
+        SCANNER_HOME  = tool 'sonar-scanner'
+        ECR_REPO_V1   = '590183956481.dkr.ecr.us-east-1.amazonaws.com/tetrisv1'
+        ECR_REPO_V2   = '590183956481.dkr.ecr.us-east-1.amazonaws.com/tetrisv2'
+    }
+
+    stages {
+        stage('Clean Workspace') {
+            steps {
                 cleanWs()
             }
         }
-        stage('checkout from Git'){
-            steps{
-                git branch: 'main', url: 'https://github.com/Aj7Ay/TERRAFORM-JENKINS-CICD.git'
-            }
-        }
-        stage('Terraform version'){
-             steps{
-                 sh 'terraform --version'
-                }
-        }
-        stage("Sonarqube Analysis "){
-            steps{
-                withSonarQubeEnv('sonar-server') {
-                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Terraform \
-                    -Dsonar.projectKey=Terraform '''
-                }
-            }
-        }
-        stage("quality gate"){
-           steps {
-                script {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token' 
-                }
-            } 
-        }
-        stage('TRIVY FS SCAN') {
+
+        stage('Checkout Code') {
             steps {
-                sh "trivy fs . > trivyfs.txt"
+                script {
+                    def repoUrl = (params.APP_VERSION == 'tetrisv1') ?
+                        'https://github.com/OluwaTossin/Tetris-EKS-Deployment.git' :
+                        'https://github.com/OluwaTossin/Tetris-EKS-Deployment.git'
+                    git branch: 'main', url: repoUrl
+                }
             }
         }
-        stage('Excutable permission to userdata'){
-            steps{
-                sh 'chmod 777 website.sh'
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh '''
+                        $SCANNER_HOME/bin/sonar-scanner \
+                        -Dsonar.projectKey=$APP_VERSION \
+                        -Dsonar.projectName=$APP_VERSION
+                    '''
+                }
             }
         }
-        stage('Terraform init'){
-            steps{
+
+        stage('Quality Gate') {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: true, credentialsId: 'sonar-token'
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm install'
+            }
+        }
+
+        stage('OWASP Dependency Check') {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-Check'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+
+        stage('Trivy Filesystem Scan') {
+            steps {
+                sh 'trivy fs . > trivy-fs-scan.txt'
+            }
+        }
+
+        stage('Login to AWS ECR') {
+            steps {
+                sh '''
+                    aws ecr get-login-password --region $AWS_REGION \
+                    | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                '''
+            }
+        }
+
+        stage('Build and Push Docker Image') {
+            steps {
+                script {
+                    def ecrRepo = (params.APP_VERSION == 'tetrisv1') ? env.ECR_REPO_V1 : env.ECR_REPO_V2
+                    sh """
+                        docker build -t ${params.APP_VERSION} .
+                        docker tag ${params.APP_VERSION} ${ecrRepo}:latest
+                        docker push ${ecrRepo}:latest
+                    """
+                }
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            steps {
+                script {
+                    def ecrRepo = (params.APP_VERSION == 'tetrisv1') ? env.ECR_REPO_V1 : env.ECR_REPO_V2
+                    sh "trivy image ${ecrRepo}:latest > trivy-image-scan.txt"
+                }
+            }
+        }
+
+        stage('Terraform Init') {
+            when {
+                expression { params.TERRAFORM_ACTION != 'skip' }
+            }
+            steps {
                 sh 'terraform init'
             }
         }
-        stage('Terraform plan'){
-            steps{
+
+        stage('Terraform Plan') {
+            when {
+                expression { params.TERRAFORM_ACTION != 'skip' }
+            }
+            steps {
                 sh 'terraform plan'
             }
         }
-        stage('Terraform apply'){
-            steps{
-                sh 'terraform ${action} --auto approve'
+
+        stage('Terraform Apply/Destroy') {
+            when {
+                expression { params.TERRAFORM_ACTION != 'skip' }
             }
+            steps {
+                sh "terraform ${params.TERRAFORM_ACTION} --auto-approve"
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: '**/*.txt', allowEmptyArchive: true
         }
     }
 }

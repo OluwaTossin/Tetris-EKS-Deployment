@@ -1,15 +1,19 @@
 #!/bin/bash
 
-# Update the package manager and install Docker
+# Update and install Docker & AWS CLI
 sudo apt-get update -y
-sudo apt-get install -y docker.io
+sudo apt-get install -y docker.io unzip curl awscli
 
-# Start the Docker service
+# Start and enable Docker
 sudo systemctl start docker
-
-# Enable Docker to start on boot
 sudo systemctl enable docker
 
-# Pull and run a simple Nginx web server container
-sudo docker run -d --name zomato -p 3000:3000 sevenajay/zomato:latest
-sudo docker run -d --name netflix -p 8081:80 sevenajay/netflix:latest
+# Login to AWS ECR
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 590183956481.dkr.ecr.us-east-1.amazonaws.com
+
+# Pull and run the Tetris game images from ECR
+docker pull 590183956481.dkr.ecr.us-east-1.amazonaws.com/tetrisv1:latest
+docker pull 590183956481.dkr.ecr.us-east-1.amazonaws.com/tetrisv2:latest
+
+docker run -d --name tetris-v1 -p 3000:3000 590183956481.dkr.ecr.us-east-1.amazonaws.com/tetrisv1:latest
+docker run -d --name tetris-v2 -p 8081:80 590183956481.dkr.ecr.us-east-1.amazonaws.com/tetrisv2:latest
