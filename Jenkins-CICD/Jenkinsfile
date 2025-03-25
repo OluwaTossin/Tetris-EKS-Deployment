@@ -2,10 +2,9 @@ pipeline {
     agent any
 
     tools {
-        jdk 'jdk17'
-        nodejs 'node16'
-        terraform 'terraform'
-    }
+    nodejs 'node16'
+    terraform 'terraform'
+}
 
     parameters {
         choice(name: 'APP_VERSION', choices: ['tetrisv1', 'tetrisv2'], description: 'Select which version to build and deploy.')
